@@ -1,4 +1,6 @@
-import redis from '../config/redis.js';
+import NodeCache from 'node-cache';
+
+const cache = new NodeCache({ stdTTL: 300, checkperiod: 320 }); 
 
 export const cacheMiddleware = (duration = 300) => {
   return async (req, res, next) => {
@@ -8,29 +10,28 @@ export const cacheMiddleware = (duration = 300) => {
 
     const key = `cache:${req.originalUrl}`;
 
-    try {
-      const cachedData = await redis.get(key);
-      if (cachedData) {
-        return res.json(JSON.parse(cachedData));
-      }
-
-      const originalJson = res.json;
-      res.json = function(data) {
-        redis.setex(key, duration, JSON.stringify(data));
-        originalJson.call(this, data);
-      };
-
-      next();
-    } catch (error) {
-      console.error('Cache middleware error:', error);
-      next();
+  
+    const cachedData = cache.get(key);
+    if (cachedData) {
+      return res.json(cachedData);
     }
+
+    const originalJson = res.json;
+    res.json = function(data) {
+      cache.set(key, data, duration); 
+      originalJson.call(this, data);
+    };
+
+    next();
   };
 };
 
 export const clearCache = async (pattern) => {
-  const keys = await redis.keys(`cache:${pattern}`);
-  if (keys.length > 0) {
-    await redis.del(keys);
-  }
-}; 
+ 
+  const keys = cache.keys();
+  keys.forEach((key) => {
+    if (key.includes(pattern)) {
+      cache.del(key); 
+    }
+  });
+};

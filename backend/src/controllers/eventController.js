@@ -1,11 +1,11 @@
 import { Event } from '../models/Event.js';
 import { io } from '../app.js';
 import { clearCache } from '../middleware/cache.js';
-import { emitEventUpdate } from '../services/websocket.js';
-import redis from '../config/redis.js';
+import NodeCache from 'node-cache';
 
-const CACHE_DURATION = 300; // 5 minutes
+const cache = new NodeCache({ stdTTL: 300, checkperiod: 320 }); 
 
+const CACHE_DURATION = 300; 
 export const eventController = {
   async createEvent(req, res) {
     try {
@@ -46,6 +46,14 @@ export const eventController = {
         query.category = { $in: categories };
       }
 
+      const cacheKey = `events:${JSON.stringify(query)}:page:${page}:limit:${limit}`;
+
+      // Check cache
+      const cachedData = cache.get(cacheKey);
+      if (cachedData) {
+        return res.json(cachedData);
+      }
+
       const [events, total] = await Promise.all([
         Event.find(query)
           .sort({ date: 1 })
@@ -66,9 +74,8 @@ export const eventController = {
         }
       };
 
-      // Set cache with populated data
-      const cacheKey = `events:${JSON.stringify(query)}:page:${page}:limit:${limit}`;
-      await redis.setex(cacheKey, CACHE_DURATION, JSON.stringify(response));
+      // Cache the response
+      cache.set(cacheKey, response, CACHE_DURATION);
 
       res.json(response);
     } catch (error) {
@@ -113,7 +120,8 @@ export const eventController = {
         { new: true, runValidators: true }
       ).populate('creator', 'name');
 
-      await clearCache(`events:*`);
+      // Clear cache for all events
+      cache.del(`events:*`);
       io.to(`event:${req.params.id}`).emit('eventUpdate', updatedEvent);
 
       res.json(updatedEvent);
@@ -135,7 +143,7 @@ export const eventController = {
       }
 
       await event.deleteOne();
-      await clearCache(`events:*`);
+      cache.del(`events:*`);
       io.to(`event:${req.params.id}`).emit('eventDeleted', req.params.id);
 
       res.json({ message: 'Event deleted successfully' });
@@ -200,8 +208,8 @@ export const eventController = {
       }
 
       // Clear cache for this event
-      await clearCache(`events:*`);
-      await clearCache(`event:${id}`);
+      cache.del(`events:*`);
+      cache.del(`event:${id}`);
 
       // Emit real-time update
       io.to(`event:${id}`).emit('attendeesUpdated', {
@@ -234,4 +242,4 @@ export const eventController = {
       res.status(500).json({ message: error.message });
     }
   }
-}; 
+};
